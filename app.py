@@ -1,128 +1,273 @@
+"""
+AirSial Operations Management System - Complete Edition
+With AI-powered insights and bulk data management
+"""
+
 import streamlit as st
+import pandas as pd
+import json
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
+from pathlib import Path
+import uuid
 import requests
-import json
 
-st.set_page_config(page_title="AirSial Enterprise", page_icon="✈️", layout="wide")
+# Page Configuration
+st.set_page_config(
+    page_title="AirSial Operations Hub",
+    page_icon="✈️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Custom CSS
+# Professional Styling
 st.markdown("""
-    <style>
-    .role-badge { padding: 10px; border-radius: 5px; font-weight: bold; color: white; }
-    .role-admin { background-color: #dc3545; }
-    .role-manager { background-color: #007bff; }
-    .role-engineer { background-color: #28a745; }
-    .ai-response { background-color: #e3f2fd; border-left: 4px solid #2196F3; padding: 15px; border-radius: 5px; margin: 10px 0; }
-    </style>
+<style>
+    /* Main Theme */
+    .main { padding: 0rem 1rem; }
+    
+    /* AI Response Box */
+    .ai-response {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        margin: 10px 0;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    /* Status Badges */
+    .status-critical { background: #e74c3c; color: white; padding: 5px 10px; border-radius: 5px; }
+    .status-warning { background: #f39c12; color: white; padding: 5px 10px; border-radius: 5px; }
+    .status-good { background: #27ae60; color: white; padding: 5px 10px; border-radius: 5px; }
+    
+    /* Info Boxes */
+    .info-box {
+        background: #ecf0f1;
+        border-left: 4px solid #3498db;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    
+    /* Chat Message */
+    .user-message {
+        background: #f0f0f0;
+        padding: 10px;
+        border-radius: 10px;
+        margin: 5px 0;
+    }
+    
+    .assistant-message {
+        background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+        color: white;
+        padding: 10px;
+        border-radius: 10px;
+        margin: 5px 0;
+    }
+</style>
 """, unsafe_allow_html=True)
 
-# Session state
-if 'user' not in st.session_state:
-    st.session_state.user = None
-if 'user_role' not in st.session_state:
-    st.session_state.user_role = None
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
+# Initialize Session State (safe version)
+defaults = {
+    'user': None,
+    'role': None,
+    'maintenance_data': [],
+    'safety_data': [],
+    'flight_data': [],
+    'chat_history': []
+}
 
-# File paths
-MAINTENANCE_FILE = "maintenance_data.csv"
-SAFETY_FILE = "safety_data.csv"
-FLIGHTS_FILE = "flights_data.csv"
+for key, default_value in defaults.items():
+    if key not in st.session_state or st.session_state[key] is None:
+        st.session_state[key] = default_value
 
-# CSV Column headers
-MAINTENANCE_COLS = ["id", "aircraft_registration", "maintenance_date", "maintenance_type", "engineer_name", "hours_spent", "parts_replaced", "status", "created_at"]
-SAFETY_COLS = ["id", "incident_date", "flight_number", "incident_type", "severity", "description", "reported_by", "action_taken", "created_at"]
-FLIGHTS_COLS = ["id", "flight_number", "date", "departure_airport", "arrival_airport", "pilot_name", "crew_members", "passengers_count", "notes", "created_at"]
 
-# Read CSV files
-def read_csv(filename, columns):
-    try:
-        with open(filename, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            return list(reader) if reader else []
-    except:
-        return []
-
-def write_csv(filename, data, columns):
-    with open(filename, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=columns)
-        writer.writeheader()
-        writer.writerows(data)
-
-# Load data
-maint_data = read_csv(MAINTENANCE_FILE, MAINTENANCE_COLS)
-safety_data = read_csv(SAFETY_FILE, SAFETY_COLS)
-flights_data = read_csv(FLIGHTS_FILE, FLIGHTS_COLS)
-
-# Real AI Integration - Groq (Free API with generous free tier)
-def get_ai_response(query, context_data):
-    """Use Groq API for real AI responses"""
-    try:
-        # Using Groq's free API (no key needed for basic usage)
-        # Alternative: Use Ollama locally if available
+# Data Manager with CSV Support
+class DataManager:
+    @staticmethod
+    def add_record(data_type, record):
+        record['id'] = str(uuid.uuid4())[:8]
+        record['created_at'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+        record['created_by'] = st.session_state.user
         
-        # Format operational data
-        fleet_summary = f"""
-OPERATIONAL DATA:
-- Maintenance Records: {len(maint_data)}
-- Total Maintenance Hours: {sum(float(r.get('hours_spent', 0)) for r in maint_data):.1f}
-- Pending Tasks: {len([r for r in maint_data if r.get('status') == 'Pending'])}
-- Safety Incidents: {len(safety_data)}
-- Critical Incidents: {len([r for r in safety_data if r.get('severity') in ['High', 'Critical']])}
-- Flights Operated: {len(flights_data)}
+        if data_type == 'maintenance':
+            st.session_state.maintenance_data.append(record)
+        elif data_type == 'safety':
+            st.session_state.safety_data.append(record)
+        elif data_type == 'flight':
+            st.session_state.flight_data.append(record)
+        
+        return record['id']
+    
+    @staticmethod
+    def bulk_upload_csv(data_type, csv_file):
+        """Process and upload CSV data in bulk"""
+        try:
+            # Read CSV file
+            df = pd.read_csv(csv_file)
+            records_added = 0
+            
+            # Get current data list
+            if data_type == 'maintenance':
+                data_list = st.session_state.maintenance_data
+            elif data_type == 'safety':
+                data_list = st.session_state.safety_data
+            elif data_type == 'flight':
+                data_list = st.session_state.flight_data
+            else:
+                return 0, "Invalid data type"
+            
+            # Process each row
+            for _, row in df.iterrows():
+                record = row.to_dict()
+                record['id'] = str(uuid.uuid4())[:8]
+                record['created_at'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                record['created_by'] = st.session_state.user
+                record['uploaded_via'] = 'CSV Import'
+                data_list.append(record)
+                records_added += 1
+            
+            return records_added, "Success"
+        
+        except Exception as e:
+            return 0, str(e)
+    
+    @staticmethod
+    def export_to_csv(data_type):
+        """Export data to CSV format"""
+        if data_type == 'maintenance':
+            data = st.session_state.maintenance_data
+        elif data_type == 'safety':
+            data = st.session_state.safety_data
+        elif data_type == 'flight':
+            data = st.session_state.flight_data
+        else:
+            return None
+        
+        if data:
+            df = pd.DataFrame(data)
+            return df.to_csv(index=False)
+        return None
 
-TOP MAINTENANCE TYPES:
+# AI Agent for Operations Intelligence
+class AIAgent:
+    def __init__(self):
+        self.groq_api_key = st.secrets.get("GROQ_API_KEY", "")
+    
+    def get_ai_response(self, query):
+        """Generate AI response based on operational data"""
+        
+        # Analyze current data
+        context = self._build_context()
+        
+        # Try Groq API first (if key available)
+        if self.groq_api_key:
+            response = self._call_groq_api(query, context)
+            if response:
+                return response
+        
+        # Try Ollama locally
+        response = self._call_ollama(query, context)
+        if response:
+            return response
+        
+        # Fallback to rule-based responses
+        return self._generate_fallback_response(query, context)
+    
+    def _build_context(self):
+        """Build context from operational data"""
+        maint_data = st.session_state.maintenance_data
+        safety_data = st.session_state.safety_data
+        flight_data = st.session_state.flight_data
+        
+        # Calculate metrics
+        total_maint = len(maint_data)
+        pending_maint = len([m for m in maint_data if m.get('status') == 'Pending'])
+        completed_maint = len([m for m in maint_data if m.get('status') == 'Completed'])
+        
+        total_incidents = len(safety_data)
+        critical_incidents = len([s for s in safety_data if s.get('severity') in ['Critical', 'High']])
+        
+        total_flights = len(flight_data)
+        
+        # Calculate maintenance hours
+        total_hours = sum(float(m.get('estimated_hours', 0)) for m in maint_data)
+        avg_hours = total_hours / total_maint if total_maint > 0 else 0
+        
+        # Identify top maintenance types
+        maint_types = {}
+        for m in maint_data:
+            mtype = m.get('type', 'Unknown')
+            maint_types[mtype] = maint_types.get(mtype, 0) + 1
+        
+        context = f"""
+OPERATIONAL DATA SUMMARY:
+========================
+Maintenance:
+- Total Tasks: {total_maint}
+- Pending: {pending_maint}
+- Completed: {completed_maint}
+- Total Hours: {total_hours:.1f}
+- Average Hours/Task: {avg_hours:.1f}
+
+Safety:
+- Total Incidents: {total_incidents}
+- Critical/High: {critical_incidents}
+- Safety Score: {max(0, 100 - critical_incidents * 10)}/100
+
+Flights:
+- Total Flights: {total_flights}
+
+Top Maintenance Types:
 """
-        types = {}
-        for r in maint_data:
-            t = r.get('maintenance_type', 'Unknown')
-            types[t] = types.get(t, 0) + 1
-        for mtype, count in sorted(types.items(), key=lambda x: x[1], reverse=True)[:5]:
-            fleet_summary += f"- {mtype}: {count} times\n"
+        for mtype, count in sorted(maint_types.items(), key=lambda x: x[1], reverse=True)[:5]:
+            context += f"- {mtype}: {count} times\n"
         
-        # Call Groq API (free tier - no authentication required for basic usage)
-        # Using llama2 or mistral model
-        system_prompt = """You are an expert airline operations manager AI. Analyze fleet data and provide strategic insights, 
-        risk assessments, cost-benefit analyses, and actionable recommendations. Be specific with numbers and timelines. 
-        Focus on business impact and ROI."""
-        
-        user_message = f"{fleet_summary}\n\nUser Question: {query}\n\nProvide a detailed, professional analysis."
-        
-        # Try Groq API (requires free API key from groq.com)
-        groq_api_key = st.secrets.get("GROQ_API_KEY", "")
-        
-        if groq_api_key:
-            # Groq API call
+        return context
+    
+    def _call_groq_api(self, query, context):
+        """Call Groq API for AI response"""
+        try:
+            system_prompt = """You are an expert airline operations AI assistant. 
+            Analyze fleet data and provide strategic insights, risk assessments, 
+            and actionable recommendations. Be specific with numbers and timelines.
+            Focus on cost reduction, efficiency improvements, and safety."""
+            
             response = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {groq_api_key}",
+                    "Authorization": f"Bearer {self.groq_api_key}",
                     "Content-Type": "application/json"
                 },
                 json={
                     "model": "mixtral-8x7b-32768",
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message}
+                        {"role": "user", "content": f"{context}\n\nQuestion: {query}"}
                     ],
                     "temperature": 0.7,
                     "max_tokens": 1000
-                }
+                },
+                timeout=30
             )
             
             if response.status_code == 200:
                 return response.json()["choices"][0]["message"]["content"]
-        
-        # Fallback: Try local Ollama if available
+        except:
+            pass
+        return None
+    
+    def _call_ollama(self, query, context):
+        """Call local Ollama for AI response"""
         try:
             response = requests.post(
                 "http://localhost:11434/api/generate",
                 json={
                     "model": "llama2",
-                    "prompt": f"{system_prompt}\n\n{user_message}",
+                    "prompt": f"You are an airline operations expert. {context}\n\nQuestion: {query}\n\nAnswer:",
                     "stream": False
                 },
                 timeout=30
@@ -131,987 +276,643 @@ TOP MAINTENANCE TYPES:
                 return response.json()["response"]
         except:
             pass
-        
-        # Fallback to structured response
-        return generate_fallback_response(query, maint_data, safety_data, flights_data)
-        
-    except Exception as e:
-        return f"⚠️ AI temporarily unavailable. Error: {str(e)}"
-
-def generate_fallback_response(query, maint_data, safety_data, flights_data):
-    """Fallback response generator"""
-    query_lower = query.lower()
+        return None
     
-    if 'decrease' in query_lower or 'reduce' in query_lower or 'frequency' in query_lower:
-        response = "**📊 Frequency Reduction Strategy**\n\n"
-        response += "**Current Analysis:**\n"
-        response += f"- Total Maintenance Events: {len(maint_data)}\n"
-        response += f"- Average Task Duration: {(sum(float(r.get('hours_spent', 0)) for r in maint_data) / len(maint_data)):.1f} hours\n\n"
-        response += "**Recommended Actions:**\n"
-        response += "1. Implement condition-based maintenance (CBM)\n"
-        response += "   - Cost: $50K\n"
-        response += "   - Reduction: 20-30%\n"
-        response += "   - ROI: 8 months\n\n"
-        response += "2. Extend maintenance intervals\n"
-        response += "   - Review with OEM\n"
-        response += "   - Potential savings: 15%\n\n"
-        response += "3. Cross-train staff for parallel execution\n"
-        response += "   - Training cost: $5K\n"
-        response += "   - Time savings: 25%\n"
-        return response
-    
-    elif 'average' in query_lower or 'hours' in query_lower:
-        if maint_data:
-            avg = sum(float(r.get('hours_spent', 0)) for r in maint_data) / len(maint_data)
-            return f"**⏱️ Maintenance Hours Analysis**\n\n- Average Hours per Task: **{avg:.2f} hours**\n- Total Fleet Hours: {sum(float(r.get('hours_spent', 0)) for r in maint_data):.1f}\n- Total Tasks: {len(maint_data)}\n\nBenchmark: Industry average is 3-4 hours. Your fleet is {'efficient ✅' if avg < 3.5 else 'requires optimization'}"
-    
-    return "🤖 To enable full AI, add GROQ_API_KEY to Streamlit secrets or install Ollama locally."
-
-# Authentication
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def authenticate(username, password):
-    users = {
-        "admin": {"password": hash_password("admin123"), "role": "Admin"},
-        "manager": {"password": hash_password("manager123"), "role": "Manager"},
-        "engineer": {"password": hash_password("engineer123"), "role": "Engineer"}
-    }
-    
-    if username in users and users[username]["password"] == hash_password(password):
-        return True, users[username]["role"]
-    return False, None
-
-# Login
-if st.session_state.user is None:
-    st.title("🔐 AirSial Enterprise Login")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("### Secure Access Portal")
-        username = st.text_input("Enter username", placeholder="admin", key="login_username")
-        password = st.text_input("Enter password", type="password", placeholder="admin123", key="login_password")
+    def _generate_fallback_response(self, query, context):
+        """Generate rule-based response when AI is unavailable"""
+        query_lower = query.lower()
         
-        if st.button("🔓 Login", use_container_width=True, key="login_btn"):
-            if username and password:
-                success, role = authenticate(username, password)
-                if success:
-                    st.session_state.user = username
-                    st.session_state.user_role = role
-                    st.success(f"Welcome {username}!")
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials!")
-            else:
-                st.warning("Please enter username and password")
+        # Parse data
+        maint_data = st.session_state.maintenance_data
+        safety_data = st.session_state.safety_data
+        flight_data = st.session_state.flight_data
         
-# Login
-if st.session_state.user is None:
-    st.title("🔐 AirSial Enterprise Login")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("### Secure Access Portal")
-        username = st.text_input("Enter username", placeholder="admin", key="login_username")
-        password = st.text_input("Enter password", type="password", placeholder="admin123", key="login_password")
-        
-        if st.button("🔓 Login", use_container_width=True, key="login_btn"):
-            if username and password:
-                success, role = authenticate(username, password)
-                if success:
-                    st.session_state.user = username
-                    st.session_state.user_role = role
-                    st.success(f"Welcome {username}!")
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials!")
-            else:
-                st.warning("Please enter username and password")
-        
-        st.divider()
-st.info("**Demo Accounts:**\n- admin / admin123\n- manager / manager123\n- engineer / engineer123")
-
-# Main app section
-if st.session_state.user is not None:
-    # Code to run when the user is logged in
-    with st.sidebar:
-        st.markdown(f'<div class="role-badge role-{st.session_state.user_role.lower()}">👤 {st.session_state.user}</div>', unsafe_allow_html=True)
-        if st.button("Logout"):
-            st.session_state.user = None
-            st.rerun()
-else: 
-    # Code to run when the user is NOT logged in
-    st.warning("Please log in to continue.")
-
-    
-    st.title("✈️ AirSial Enterprise")
-    page = st.sidebar.radio("Navigate", ["🤖 AI Chat", "📊 Dashboard", "📝 Submit", "📋 Manage", "📤 Upload", "📥 Export"])
-    
-    if page == "🤖 AI Chat":
-        st.header("🤖 AI Agent - Operational Intelligence")
-        st.write("Real AI Analysis | Powered by Groq/Ollama")
-        
-        # Display chat history
-        chat_container = st.container(height=400, border=True)
-        with chat_container:
-            for msg in st.session_state.chat_history:
-                if msg['role'] == 'user':
-                    st.markdown(f"**👤 You:** {msg['content']}")
-                else:
-                    st.markdown(f'<div class="ai-response">**🤖 AI Agent:**\n{msg["content"]}</div>', unsafe_allow_html=True)
-        
-        # Input section
-        st.divider()
-        
-        col1, col2 = st.columns([5, 1])
-        with col1:
-            user_input = st.text_input("Ask a question...", placeholder="e.g., How can we decrease maintenance frequency? Why are we having delays?")
-        with col2:
-            send_btn = st.button("Send", use_container_width=True)
-        
-        # Process input
-        if send_btn and user_input:
-            st.session_state.chat_history.append({'role': 'user', 'content': user_input})
+        if any(word in query_lower for word in ['decrease', 'reduce', 'optimize', 'efficiency']):
+            pending = len([m for m in maint_data if m.get('status') == 'Pending'])
+            total = len(maint_data)
+            avg_hours = sum(float(m.get('estimated_hours', 0)) for m in maint_data) / total if total > 0 else 0
             
-            # Get real AI response
-            with st.spinner("🤖 AI thinking..."):
-                ai_response = get_ai_response(user_input, {
-                    'maint': maint_data,
-                    'safety': safety_data,
-                    'flights': flights_data
-                })
+            response = "**📊 OPERATIONAL OPTIMIZATION STRATEGY**\n\n"
+            response += f"**Current Status:**\n"
+            response += f"- {pending} pending maintenance tasks ({(pending/total*100):.1f}% of total)\n"
+            response += f"- Average task duration: {avg_hours:.1f} hours\n\n"
             
-            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
-            st.rerun()
-        
-        if st.session_state.chat_history:
-            if st.button("Clear Chat"):
-                st.session_state.chat_history = []
-                st.rerun()
-        
-        st.divider()
-        st.info("💡 **To Enable Real AI:**\n1. Get free API key from groq.com\n2. Add to Streamlit secrets: GROQ_API_KEY\n3. Or install Ollama locally (ollama.ai)")
-    
-    elif page == "📊 Dashboard":
-        st.header("📊 Dashboard")
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Maintenance", len(maint_data))
-        col2.metric("Safety", len(safety_data))
-        col3.metric("Flights", len(flights_data))
-        
-        st.subheader(f"Maintenance Records ({len(maint_data)})")
-        if maint_data:
-            st.table(maint_data)
-        else:
-            st.info("No records")
-        
-        st.subheader(f"Safety Records ({len(safety_data)})")
-        if safety_data:
-            st.table(safety_data)
-        else:
-            st.info("No records")
-        
-        st.subheader(f"Flight Records ({len(flights_data)})")
-        if flights_data:
-            st.table(flights_data)
-        else:
-            st.info("No records")
-    
-    elif page == "📝 Submit":
-        st.header("📝 Submit Report")
-        report_type = st.selectbox("Type", ["Maintenance", "Safety", "Flight"])
-        
-        if report_type == "Maintenance":
-            with st.form("maint_form"):
-                aircraft = st.text_input("Aircraft Registration")
-                maint_date = st.date_input("Date")
-                maint_type = st.text_input("Type")
-                engineer = st.text_input("Engineer")
-                hours = st.number_input("Hours", min_value=0.0)
-                parts = st.text_input("Parts")
-                status = st.selectbox("Status", ["Pending", "In Progress", "Completed"])
-                
-                if st.form_submit_button("Submit"):
-                    new_record = {
-                        "id": str(len(maint_data) + 1),
-                        "aircraft_registration": aircraft,
-                        "maintenance_date": str(maint_date),
-                        "maintenance_type": maint_type,
-                        "engineer_name": engineer,
-                        "hours_spent": str(hours),
-                        "parts_replaced": parts,
-                        "status": status,
-                        "created_at": datetime.now().isoformat()
-                    }
-                    maint_data.append(new_record)
-                    write_csv(MAINTENANCE_FILE, maint_data, MAINTENANCE_COLS)
-                    st.success("✅ Added!")
-                    st.rerun()
-        
-        elif report_type == "Safety":
-            with st.form("safety_form"):
-                incident_date = st.date_input("Date")
-                flight = st.text_input("Flight Number")
-                incident_type = st.text_input("Type")
-                severity = st.selectbox("Severity", ["Low", "Medium", "High", "Critical"])
-                description = st.text_area("Description")
-                reported_by = st.text_input("Reported By")
-                action = st.text_area("Action")
-                
-                if st.form_submit_button("Submit"):
-                    new_record = {
-                        "id": str(len(safety_data) + 1),
-                        "incident_date": str(incident_date),
-                        "flight_number": flight,
-                        "incident_type": incident_type,
-                        "severity": severity,
-                        "description": description,
-                        "reported_by": reported_by,
-                        "action_taken": action,
-                        "created_at": datetime.now().isoformat()
-                    }
-                    safety_data.append(new_record)
-                    write_csv(SAFETY_FILE, safety_data, SAFETY_COLS)
-                    st.success("✅ Added!")
-                    st.rerun()
-        
-        else:
-            with st.form("flight_form"):
-                flight = st.text_input("Flight Number")
-                flight_date = st.date_input("Date")
-                dept = st.text_input("From")
-                arrv = st.text_input("To")
-                pilot = st.text_input("Pilot")
-                crew = st.number_input("Crew", min_value=1)
-                passengers = st.number_input("Passengers", min_value=0)
-                notes = st.text_input("Notes")
-                
-                if st.form_submit_button("Submit"):
-                    new_record = {
-                        "id": str(len(flights_data) + 1),
-                        "flight_number": flight,
-                        "date": str(flight_date),
-                        "departure_airport": dept,
-                        "arrival_airport": arrv,
-                        "pilot_name": pilot,
-                        "crew_members": str(crew),
-                        "passengers_count": str(passengers),
-                        "notes": notes,
-                        "created_at": datetime.now().isoformat()
-                    }
-                    flights_data.append(new_record)
-                    write_csv(FLIGHTS_FILE, flights_data, FLIGHTS_COLS)
-                    st.success("✅ Added!")
-                    st.rerun()
-    
-    elif page == "📋 Manage":
-        st.header("📋 Manage Data")
-        data_type = st.selectbox("Select", ["Maintenance", "Safety", "Flights"])
-        
-        if data_type == "Maintenance":
-            search = st.text_input("Search maintenance...")
-            filtered = [r for r in maint_data if not search or search.lower() in str(r).lower()]
+            response += "**Recommendations to Decrease Maintenance Frequency:**\n\n"
+            response += "1. **Implement Predictive Maintenance**\n"
+            response += "   - Investment: $50,000-75,000\n"
+            response += "   - Expected reduction: 25-30% in unscheduled maintenance\n"
+            response += "   - ROI period: 8-12 months\n\n"
             
-            st.table(filtered)
+            response += "2. **Optimize Maintenance Intervals**\n"
+            response += "   - Review MSG-3 analysis with OEM\n"
+            response += "   - Potential extension of A-Check from 500 to 600 flight hours\n"
+            response += "   - Savings: $200,000 annually\n\n"
             
-            if st.session_state.user_role == "Admin":
-                st.divider()
-                st.subheader("🗑️ Bulk Delete")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    start_id = st.text_input("Start ID", placeholder="1")
-                with col2:
-                    end_id = st.text_input("End ID", placeholder="100")
-                
-                if st.button("Delete Range"):
-                    if start_id and end_id:
-                        try:
-                            start = int(start_id)
-                            end = int(end_id)
-                            original_len = len(maint_data)
-                            maint_data[:] = [r for r in maint_data if not (start <= int(r.get("id", 0)) <= end)]
-                            deleted = original_len - len(maint_data)
-                            if deleted > 0:
-                                write_csv(MAINTENANCE_FILE, maint_data, MAINTENANCE_COLS)
-                                st.success(f"✅ Deleted {deleted}!")
-                                st.rerun()
-                        except:
-                            st.error("Invalid IDs")
+            response += "3. **Cross-Training Program**\n"
+            response += "   - Train 5 additional engineers\n"
+            response += "   - Cost: $25,000\n"
+            response += "   - Benefit: 35% reduction in turnaround time\n\n"
+            
+            response += "4. **Parts Inventory Optimization**\n"
+            response += "   - Implement JIT inventory system\n"
+            response += "   - Reduce parts waiting time by 40%\n"
+            response += "   - Annual savings: $150,000\n"
+            
+            return response
         
-        elif data_type == "Safety":
-            search = st.text_input("Search safety...")
-            filtered = [r for r in safety_data if not search or search.lower() in str(r).lower()]
+        elif any(word in query_lower for word in ['risk', 'safety', 'incident']):
+            critical = len([s for s in safety_data if s.get('severity') in ['Critical', 'High']])
+            total_incidents = len(safety_data)
             
-            st.table(filtered)
+            response = "**🔍 RISK ASSESSMENT & MITIGATION**\n\n"
+            response += f"**Current Risk Profile:**\n"
+            response += f"- Total incidents: {total_incidents}\n"
+            response += f"- Critical/High severity: {critical}\n"
+            response += f"- Risk Score: {max(0, 100 - critical * 10)}/100\n\n"
             
-            if st.session_state.user_role == "Admin":
-                st.divider()
-                st.subheader("🗑️ Bulk Delete")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    start_id2 = st.text_input("Start ID", placeholder="1", key="safety_start")
-                with col2:
-                    end_id2 = st.text_input("End ID", placeholder="100", key="safety_end")
-                
-                if st.button("Delete Range", key="safety_del"):
-                    if start_id2 and end_id2:
-                        try:
-                            start = int(start_id2)
-                            end = int(end_id2)
-                            original_len = len(safety_data)
-                            safety_data[:] = [r for r in safety_data if not (start <= int(r.get("id", 0)) <= end)]
-                            deleted = original_len - len(safety_data)
-                            if deleted > 0:
-                                write_csv(SAFETY_FILE, safety_data, SAFETY_COLS)
-                                st.success(f"✅ Deleted {deleted}!")
-                                st.rerun()
-                        except:
-                            st.error("Invalid IDs")
-        
-        else:
-            search = st.text_input("Search flights...")
-            filtered = [r for r in flights_data if not search or search.lower() in str(r).lower()]
-            
-            st.table(filtered)
-            
-            if st.session_state.user_role == "Admin":
-                st.divider()
-                st.subheader("🗑️ Bulk Delete")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    start_id3 = st.text_input("Start ID", placeholder="1", key="flights_start")
-                with col2:
-                    end_id3 = st.text_input("End ID", placeholder="100", key="flights_end")
-                
-                if st.button("Delete Range", key="flights_del"):
-                    if start_id3 and end_id3:
-                        try:
-                            start = int(start_id3)
-                            end = int(end_id3)
-                            original_len = len(flights_data)
-                            flights_data[:] = [r for r in flights_data if not (start <= int(r.get("id", 0)) <= end)]
-                            deleted = original_len - len(flights_data)
-                            if deleted > 0:
-                                write_csv(FLIGHTS_FILE, flights_data, FLIGHTS_COLS)
-                                st.success(f"✅ Deleted {deleted}!")
-                                st.rerun()
-                        except:
-                            st.error("Invalid IDs")
-    
-    elif page == "📤 Upload":
-        st.header("📤 Bulk Upload")
-        
-        if st.session_state.user_role not in ["Admin", "Manager"]:
-            st.error("Only Admins/Managers")
-        else:
-            data_type = st.selectbox("Type", ["Maintenance", "Safety", "Flights"])
-            file = st.file_uploader("CSV", type="csv")
-            
-            if file:
-                try:
-                    content = file.read().decode('utf-8')
-                    reader = csv.DictReader(io.StringIO(content))
-                    rows = list(reader)
-                    
-                    st.write(f"Preview: {len(rows)} rows")
-                    st.table(rows[:10])
-                    
-                    if st.button("✅ Upload All"):
-                        if data_type == "Maintenance":
-                            cols = MAINTENANCE_COLS
-                            data_list = maint_data
-                            filename = MAINTENANCE_FILE
-                        elif data_type == "Safety":
-                            cols = SAFETY_COLS
-                            data_list = safety_data
-                            filename = SAFETY_FILE
-                        else:
-                            cols = FLIGHTS_COLS
-                            data_list = flights_data
-                            filename = FLIGHTS_FILE
-                        
-                        cleaned_rows = []
-                        next_id = max([int(r.get("id", 0)) for r in data_list] + [0]) + 1
-                        
-                        for row in rows:
-                            cleaned_row = {}
-                            for col in cols:
-                                if col == "id":
-                                    cleaned_row[col] = str(next_id)
-                                    next_id += 1
-                                else:
-                                    cleaned_row[col] = row.get(col, "")
-                            cleaned_rows.append(cleaned_row)
-                        
-                        data_list.extend(cleaned_rows)
-                        write_csv(filename, data_list, cols)
-                        
-                        st.success(f"✅ {len(rows)} records uploaded!")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-    
-    elif page == "📥 Export":
-        st.header("📥 Export Data")
-        
-        if st.button("Export Maintenance"):
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=MAINTENANCE_COLS)
-            writer.writeheader()
-            writer.writerows(maint_data)
-            st.download_button("maintenance.csv", output.getvalue(), "maintenance.csv")
-        
-        if st.button("Export Safety"):
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=SAFETY_COLS)
-            writer.writeheader()
-            writer.writerows(safety_data)
-            st.download_button("safety.csv", output.getvalue(), "safety.csv")
-        
-        if st.button("Export Flights"):
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=FLIGHTS_COLS)
-            writer.writeheader()
-            writer.writerows(flights_data)
-            st.download_button("flights.csv", output.getvalue(), "flights.csv")
-
-# Custom CSS
-st.markdown("""
-    <style>
-    .role-badge { padding: 10px; border-radius: 5px; font-weight: bold; color: white; }
-    .role-admin { background-color: #dc3545; }
-    .role-manager { background-color: #007bff; }
-    .role-engineer { background-color: #28a745; }
-    .ai-response { background-color: #e3f2fd; border-left: 4px solid #2196F3; padding: 15px; border-radius: 5px; margin: 10px 0; }
-    </style>
-""", unsafe_allow_html=True)
-
-# Session state
-if 'user' not in st.session_state:
-    st.session_state.user = None
-if 'user_role' not in st.session_state:
-    st.session_state.user_role = None
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-
-# File paths
-MAINTENANCE_FILE = "maintenance_data.csv"
-SAFETY_FILE = "safety_data.csv"
-FLIGHTS_FILE = "flights_data.csv"
-
-# CSV Column headers
-MAINTENANCE_COLS = ["id", "aircraft_registration", "maintenance_date", "maintenance_type", "engineer_name", "hours_spent", "parts_replaced", "status", "created_at"]
-SAFETY_COLS = ["id", "incident_date", "flight_number", "incident_type", "severity", "description", "reported_by", "action_taken", "created_at"]
-FLIGHTS_COLS = ["id", "flight_number", "date", "departure_airport", "arrival_airport", "pilot_name", "crew_members", "passengers_count", "notes", "created_at"]
-
-# Read CSV files
-def read_csv(filename, columns):
-    try:
-        with open(filename, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            return list(reader) if reader else []
-    except:
-        return []
-
-def write_csv(filename, data, columns):
-    with open(filename, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=columns)
-        writer.writeheader()
-        writer.writerows(data)
-
-# Load data
-maint_data = read_csv(MAINTENANCE_FILE, MAINTENANCE_COLS)
-safety_data = read_csv(SAFETY_FILE, SAFETY_COLS)
-flights_data = read_csv(FLIGHTS_FILE, FLIGHTS_COLS)
-
-# Authentication
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def authenticate(username, password):
-    users = {
-        "admin": {"password": hash_password("admin123"), "role": "Admin"},
-        "manager": {"password": hash_password("manager123"), "role": "Manager"},
-        "engineer": {"password": hash_password("engineer123"), "role": "Engineer"}
-    }
-    
-    if username in users and users[username]["password"] == hash_password(password):
-        return True, users[username]["role"]
-    return False, None
-
-# AI Analytics
-def process_ai_query(query):
-    query_lower = query.lower()
-    response = ""
-    
-    try:
-        if any(word in query_lower for word in ['risk', 'mitigation', 'assessment']):
-            pending = len([r for r in maint_data if r.get('status') == 'Pending'])
-            in_progress = len([r for r in maint_data if r.get('status') == 'In Progress'])
-            critical = len([r for r in safety_data if r.get('severity') in ['High', 'Critical']])
-            
-            response = "🔍 **OPERATIONAL RISK ASSESSMENT**\n\n"
-            if pending > 2:
-                response += f"🚨 **High Risk**: {pending} pending maintenance tasks\n"
             if critical > 0:
-                response += f"🚨 **Critical Alert**: {critical} critical/high severity incidents\n"
-            if in_progress > 0:
-                response += f"⏳ **In Progress**: {in_progress} maintenance tasks currently being worked on\n"
-            if pending <= 2 and critical == 0:
-                response += "✅ **Green Status**: Operations within acceptable parameters"
+                response += "⚠️ **IMMEDIATE ACTION REQUIRED**\n"
+                response += f"- {critical} critical incidents need review\n"
+                response += "- Recommend emergency safety meeting\n"
+                response += "- Review and update safety protocols\n\n"
+            
+            response += "**Risk Mitigation Strategy:**\n"
+            response += "1. Enhanced crew training on incident procedures\n"
+            response += "2. Quarterly safety audits\n"
+            response += "3. Implement SMS (Safety Management System)\n"
+            response += "4. Real-time incident reporting system\n"
+            
+            return response
         
-        elif any(word in query_lower for word in ['trend', 'pattern', 'analyze']):
-            response = "📊 **TREND ANALYSIS & PATTERNS**\n\n"
+        elif 'cost' in query_lower or 'expense' in query_lower or 'budget' in query_lower:
+            total_hours = sum(float(m.get('estimated_hours', 0)) for m in maint_data)
+            hourly_rate = 150  # Assumed hourly rate
+            total_cost = total_hours * hourly_rate
+            
+            response = "**💰 COST ANALYSIS & REDUCTION**\n\n"
+            response += f"**Current Costs:**\n"
+            response += f"- Total maintenance hours: {total_hours:.1f}\n"
+            response += f"- Estimated labor cost: ${total_cost:,.2f}\n"
+            response += f"- Average per task: ${(total_cost/len(maint_data) if maint_data else 0):,.2f}\n\n"
+            
+            response += "**Cost Reduction Opportunities:**\n"
+            response += "1. Negotiate OEM contracts: 15-20% savings\n"
+            response += "2. In-house capability development: 30% reduction\n"
+            response += "3. Optimize flight schedules: 10% maintenance savings\n"
+            response += "4. Bulk parts purchasing: 25% cost reduction\n"
+            
+            return response
+        
+        elif 'trend' in query_lower or 'pattern' in query_lower:
+            response = "**📈 TREND ANALYSIS**\n\n"
             
             if maint_data:
+                # Analyze maintenance trends
                 types = {}
-                for r in maint_data:
-                    t = r.get('maintenance_type', 'Unknown')
-                    types[t] = types.get(t, 0) + 1
-                sorted_types = sorted(types.items(), key=lambda x: x[1], reverse=True)
-                response += "**Maintenance Types (most frequent):**\n"
-                for mtype, count in sorted_types[:5]:
+                for m in maint_data:
+                    mtype = m.get('type', 'Unknown')
+                    types[mtype] = types.get(mtype, 0) + 1
+                
+                response += "**Maintenance Patterns:**\n"
+                for mtype, count in sorted(types.items(), key=lambda x: x[1], reverse=True)[:5]:
                     response += f"- {mtype}: {count} occurrences\n"
             
             if safety_data:
-                severity = {}
-                for r in safety_data:
-                    s = r.get('severity', 'Unknown')
-                    severity[s] = severity.get(s, 0) + 1
-                response += "\n**Safety Incident Severity:**\n"
-                for sev, count in severity.items():
+                # Analyze safety trends
+                severities = {}
+                for s in safety_data:
+                    sev = s.get('severity', 'Unknown')
+                    severities[sev] = severities.get(sev, 0) + 1
+                
+                response += "\n**Safety Incident Distribution:**\n"
+                for sev, count in severities.items():
                     response += f"- {sev}: {count} incidents\n"
+            
+            response += "\n**Recommendations:**\n"
+            response += "- Focus on high-frequency maintenance items\n"
+            response += "- Implement preventive measures for recurring issues\n"
+            response += "- Monthly trend review meetings\n"
+            
+            return response
         
-        elif 'maintenance' in query_lower:
-            if len(maint_data) > 0:
-                total_hours = sum(float(r.get('hours_spent', 0)) for r in maint_data)
-                pending = len([r for r in maint_data if r.get('status') == 'Pending'])
-                completed = len([r for r in maint_data if r.get('status') == 'Completed'])
-                response = f"📊 **MAINTENANCE OVERVIEW**\n- Total records: {len(maint_data)}\n- Total hours: {total_hours:.1f}\n- Pending: {pending}\n- Completed: {completed}"
-            else:
-                response = "No maintenance records found"
-        
-        elif 'safety' in query_lower or 'incident' in query_lower:
-            if len(safety_data) > 0:
-                critical = len([r for r in safety_data if r.get('severity') in ['High', 'Critical']])
-                medium = len([r for r in safety_data if r.get('severity') == 'Medium'])
-                low = len([r for r in safety_data if r.get('severity') == 'Low'])
-                response = f"📊 **SAFETY INCIDENTS**\n- Total: {len(safety_data)}\n- Critical/High: {critical}\n- Medium: {medium}\n- Low: {low}"
-            else:
-                response = "No safety records found"
-        
-        elif 'flight' in query_lower or 'passenger' in query_lower:
-            if len(flights_data) > 0:
-                total_pass = sum(int(r.get('passengers_count', 0)) for r in flights_data)
-                avg_pass = total_pass / len(flights_data) if len(flights_data) > 0 else 0
-                response = f"✈️ **FLIGHT OPERATIONS**\n- Total flights: {len(flights_data)}\n- Total passengers: {total_pass}\n- Average per flight: {avg_pass:.0f}"
-            else:
-                response = "No flight records found"
-        
-        elif 'dashboard' in query_lower or 'summary' in query_lower:
-            total_maint = len(maint_data)
-            total_hours = sum(float(r.get('hours_spent', 0)) for r in maint_data) if maint_data else 0
-            total_safety = len(safety_data)
-            critical = len([r for r in safety_data if r.get('severity') in ['High', 'Critical']]) if safety_data else 0
-            total_flights = len(flights_data)
-            total_pass = sum(int(r.get('passengers_count', 0)) for r in flights_data) if flights_data else 0
-            response = f"""📊 **EXECUTIVE SUMMARY**
-- Maintenance: {total_maint} records, {total_hours:.1f} hours
-- Safety: {total_safety} incidents, {critical} critical
-- Flights: {total_flights} flights, {total_pass} passengers"""
-        
-        elif 'hours' in query_lower:
-            if maint_data:
-                total_hours = sum(float(r.get('hours_spent', 0)) for r in maint_data)
-                avg_hours = total_hours / len(maint_data)
-                response = f"⏱️ **MAINTENANCE HOURS**\n- Total: {total_hours:.1f} hours\n- Average per task: {avg_hours:.1f} hours\n- Tasks: {len(maint_data)}"
-            else:
-                response = "No maintenance data"
-        
-        if not response:
-            response = "🤖 Ask about: risks, trends, maintenance, safety, flights, hours, dashboard, or patterns"
-    
-    except Exception as e:
-        response = f"Error processing query: {str(e)}"
-    
-    return response
+        else:
+            # General response
+            response = "**📊 OPERATIONAL INTELLIGENCE**\n\n"
+            response += context + "\n\n"
+            response += "**Quick Actions:**\n"
+            response += "1. Review pending maintenance tasks\n"
+            response += "2. Check critical safety incidents\n"
+            response += "3. Analyze maintenance efficiency\n"
+            response += "4. Monitor flight operations\n\n"
+            response += "Ask me about:\n"
+            response += "- How to decrease maintenance frequency\n"
+            response += "- Risk assessment and mitigation\n"
+            response += "- Cost reduction strategies\n"
+            response += "- Trend analysis and patterns\n"
+            
+            return response
 
-# Login
-if st.session_state.user is None:
-    st.title("🔐 AirSial Enterprise Login")
+# Authentication
+def authenticate(username, password):
+    users = {
+        'admin': {'password': hashlib.sha256('admin123'.encode()).hexdigest(), 'role': 'Administrator'},
+        'manager': {'password': hashlib.sha256('manager123'.encode()).hexdigest(), 'role': 'Manager'},
+        'engineer': {'password': hashlib.sha256('engineer123'.encode()).hexdigest(), 'role': 'Engineer'},
+        'demo': {'password': hashlib.sha256('demo'.encode()).hexdigest(), 'role': 'Viewer'}
+    }
+    
+    hashed_password = hashlib.sha256(password.encode()).hexdigest()
+    if username in users and users[username]['password'] == hashed_password:
+        return True, users[username]['role']
+    return False, None
+
+# Login Page
+def show_login():
+    st.markdown("# ✈️ AirSial Operations Hub")
+    st.markdown("### AI-Powered Fleet Management System")
     
     col1, col2, col3 = st.columns([1, 2, 1])
+    
     with col2:
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        
-        if st.button("Login"):
-            success, role = authenticate(username, password)
-            if success:
-                st.session_state.user = username
-                st.session_state.user_role = role
-                st.success(f"Welcome {username}!")
-                st.rerun()
-            else:
-                st.error("Invalid credentials!")
-        
-        st.divider()
-        st.markdown("**Demo:** admin/admin123 | manager/manager123 | engineer/engineer123")
-else:
-    # Main app
-    with st.sidebar:
-        st.markdown(f'<div class="role-badge role-{st.session_state.user_role.lower()}">👤 {st.session_state.user}</div>', unsafe_allow_html=True)
-        if st.button("Logout"):
-            st.session_state.user = None
-            st.rerun()
-    
-    st.title("✈️ AirSial Enterprise")
-    page = st.sidebar.radio("Navigate", ["🤖 AI Chat", "📊 Dashboard", "📝 Submit", "📋 Manage", "📤 Upload", "📥 Export"])
-    
-    if page == "🤖 AI Chat":
-        st.header("🤖 AI Agent - Operational Intelligence")
-        st.write("Chat with AI about your fleet, maintenance, safety, and operations")
-        
-        # Display chat history
-        chat_container = st.container(height=400, border=True)
-        with chat_container:
-            for msg in st.session_state.chat_history:
-                if msg['role'] == 'user':
-                    st.markdown(f"**👤 You:** {msg['content']}")
-                else:
-                    st.markdown(f'<div class="ai-response">**🤖 AI Agent:**\n{msg["content"]}</div>', unsafe_allow_html=True)
-        
-        # Input section
-        st.divider()
-        
-        col1, col2 = st.columns([5, 1])
-        with col1:
-            user_input = st.text_input("Ask a question...", placeholder="e.g., What are the maintenance trends? Why is aircraft ABC having issues? Compare engineer efficiency...", key="chat_input")
-        with col2:
-            send_btn = st.button("Send", use_container_width=True)
-        
-        # Process input
-        if send_btn and user_input:
-            # Add user message
-            st.session_state.chat_history.append({'role': 'user', 'content': user_input})
+        with st.form("login_form"):
+            username = st.text_input("Username", placeholder="Enter username")
+            password = st.text_input("Password", type="password", placeholder="Enter password")
             
-            # Generate AI response
-            ai_response = process_ai_query(user_input)
-            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            col_a, col_b = st.columns(2)
+            with col_a:
+                login_btn = st.form_submit_button("🔓 Login", use_container_width=True)
+            with col_b:
+                demo_btn = st.form_submit_button("👁️ Demo Mode", use_container_width=True)
             
-            # Rerun to show new messages
-            st.rerun()
-        
-        # Clear history button
-        if st.session_state.chat_history:
-            if st.button("Clear Chat"):
-                st.session_state.chat_history = []
-                st.rerun()
-    
-    elif page == "📊 Dashboard":
-        st.header("📊 Dashboard")
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Maintenance", len(maint_data))
-        col2.metric("Safety", len(safety_data))
-        col3.metric("Flights", len(flights_data))
-        
-        st.subheader(f"Maintenance Records ({len(maint_data)})")
-        if maint_data:
-            st.table(maint_data)
-        else:
-            st.info("No records")
-        
-        st.subheader(f"Safety Records ({len(safety_data)})")
-        if safety_data:
-            st.table(safety_data)
-        else:
-            st.info("No records")
-        
-        st.subheader(f"Flight Records ({len(flights_data)})")
-        if flights_data:
-            st.table(flights_data)
-        else:
-            st.info("No records")
-    
-    elif page == "📝 Submit":
-        st.header("📝 Submit Report")
-        report_type = st.selectbox("Type", ["Maintenance", "Safety", "Flight"])
-        
-        if report_type == "Maintenance":
-            with st.form("maint_form"):
-                aircraft = st.text_input("Aircraft Registration")
-                maint_date = st.date_input("Date")
-                maint_type = st.text_input("Type")
-                engineer = st.text_input("Engineer")
-                hours = st.number_input("Hours", min_value=0.0)
-                parts = st.text_input("Parts")
-                status = st.selectbox("Status", ["Pending", "In Progress", "Completed"])
-                
-                if st.form_submit_button("Submit"):
-                    new_record = {
-                        "id": str(len(maint_data) + 1),
-                        "aircraft_registration": aircraft,
-                        "maintenance_date": str(maint_date),
-                        "maintenance_type": maint_type,
-                        "engineer_name": engineer,
-                        "hours_spent": str(hours),
-                        "parts_replaced": parts,
-                        "status": status,
-                        "created_at": datetime.now().isoformat()
-                    }
-                    maint_data.append(new_record)
-                    write_csv(MAINTENANCE_FILE, maint_data, MAINTENANCE_COLS)
-                    st.success("✅ Added!")
-                    st.rerun()
-        
-        elif report_type == "Safety":
-            with st.form("safety_form"):
-                incident_date = st.date_input("Date")
-                flight = st.text_input("Flight Number")
-                incident_type = st.text_input("Type")
-                severity = st.selectbox("Severity", ["Low", "Medium", "High", "Critical"])
-                description = st.text_area("Description")
-                reported_by = st.text_input("Reported By")
-                action = st.text_area("Action")
-                
-                if st.form_submit_button("Submit"):
-                    new_record = {
-                        "id": str(len(safety_data) + 1),
-                        "incident_date": str(incident_date),
-                        "flight_number": flight,
-                        "incident_type": incident_type,
-                        "severity": severity,
-                        "description": description,
-                        "reported_by": reported_by,
-                        "action_taken": action,
-                        "created_at": datetime.now().isoformat()
-                    }
-                    safety_data.append(new_record)
-                    write_csv(SAFETY_FILE, safety_data, SAFETY_COLS)
-                    st.success("✅ Added!")
-                    st.rerun()
-        
-        else:
-            with st.form("flight_form"):
-                flight = st.text_input("Flight Number")
-                flight_date = st.date_input("Date")
-                dept = st.text_input("From")
-                arrv = st.text_input("To")
-                pilot = st.text_input("Pilot")
-                crew = st.number_input("Crew", min_value=1)
-                passengers = st.number_input("Passengers", min_value=0)
-                notes = st.text_input("Notes")
-                
-                if st.form_submit_button("Submit"):
-                    new_record = {
-                        "id": str(len(flights_data) + 1),
-                        "flight_number": flight,
-                        "date": str(flight_date),
-                        "departure_airport": dept,
-                        "arrival_airport": arrv,
-                        "pilot_name": pilot,
-                        "crew_members": str(crew),
-                        "passengers_count": str(passengers),
-                        "notes": notes,
-                        "created_at": datetime.now().isoformat()
-                    }
-                    flights_data.append(new_record)
-                    write_csv(FLIGHTS_FILE, flights_data, FLIGHTS_COLS)
-                    st.success("✅ Added!")
-                    st.rerun()
-    
-    elif page == "📋 Manage":
-        st.header("📋 Manage Data")
-        data_type = st.selectbox("Select", ["Maintenance", "Safety", "Flights"])
-        
-        if data_type == "Maintenance":
-            search = st.text_input("Search...")
-            filtered = [r for r in maint_data if not search or search.lower() in str(r).lower()]
-            
-            st.table(filtered)
-            
-            if st.session_state.user_role == "Admin":
-                st.divider()
-                st.subheader("🗑️ Bulk Delete by Range")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    start_id = st.text_input("Start ID (e.g., 1)", key="start_maint")
-                with col2:
-                    end_id = st.text_input("End ID (e.g., 100)", key="end_maint")
-                
-                if st.button("🗑️ Delete Records in Range", key="del_range_maint"):
-                    if start_id and end_id:
-                        try:
-                            start = int(start_id)
-                            end = int(end_id)
-                            original_len = len(maint_data)
-                            maint_data[:] = [r for r in maint_data if not (start <= int(r.get("id", 0)) <= end)]
-                            deleted = original_len - len(maint_data)
-                            if deleted > 0:
-                                write_csv(MAINTENANCE_FILE, maint_data, MAINTENANCE_COLS)
-                                st.success(f"✅ Deleted {deleted} records (ID {start}-{end})!")
-                                st.rerun()
-                            else:
-                                st.warning("No records found in that range!")
-                        except:
-                            st.error("Invalid IDs! Use numbers only.")
-                    else:
-                        st.error("Enter both Start and End IDs")
-        
-        elif data_type == "Safety":
-            search = st.text_input("Search...")
-            filtered = [r for r in safety_data if not search or search.lower() in str(r).lower()]
-            
-            st.table(filtered)
-            
-            if st.session_state.user_role == "Admin":
-                st.divider()
-                st.subheader("🗑️ Bulk Delete by Range")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    start_id = st.text_input("Start ID (e.g., 1)", key="start_safety")
-                with col2:
-                    end_id = st.text_input("End ID (e.g., 100)", key="end_safety")
-                
-                if st.button("🗑️ Delete Records in Range", key="del_range_safety"):
-                    if start_id and end_id:
-                        try:
-                            start = int(start_id)
-                            end = int(end_id)
-                            original_len = len(safety_data)
-                            safety_data[:] = [r for r in safety_data if not (start <= int(r.get("id", 0)) <= end)]
-                            deleted = original_len - len(safety_data)
-                            if deleted > 0:
-                                write_csv(SAFETY_FILE, safety_data, SAFETY_COLS)
-                                st.success(f"✅ Deleted {deleted} records (ID {start}-{end})!")
-                                st.rerun()
-                            else:
-                                st.warning("No records found in that range!")
-                        except:
-                            st.error("Invalid IDs! Use numbers only.")
-                    else:
-                        st.error("Enter both Start and End IDs")
-        
-        else:
-            search = st.text_input("Search...")
-            filtered = [r for r in flights_data if not search or search.lower() in str(r).lower()]
-            
-            st.table(filtered)
-            
-            if st.session_state.user_role == "Admin":
-                st.divider()
-                st.subheader("🗑️ Bulk Delete by Range")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    start_id = st.text_input("Start ID (e.g., 1)", key="start_flights")
-                with col2:
-                    end_id = st.text_input("End ID (e.g., 100)", key="end_flights")
-                
-                if st.button("🗑️ Delete Records in Range", key="del_range_flights"):
-                    if start_id and end_id:
-                        try:
-                            start = int(start_id)
-                            end = int(end_id)
-                            original_len = len(flights_data)
-                            flights_data[:] = [r for r in flights_data if not (start <= int(r.get("id", 0)) <= end)]
-                            deleted = original_len - len(flights_data)
-                            if deleted > 0:
-                                write_csv(FLIGHTS_FILE, flights_data, FLIGHTS_COLS)
-                                st.success(f"✅ Deleted {deleted} records (ID {start}-{end})!")
-                                st.rerun()
-                            else:
-                                st.warning("No records found in that range!")
-                        except:
-                            st.error("Invalid IDs! Use numbers only.")
-                    else:
-                        st.error("Enter both Start and End IDs")
-    
-    elif page == "📤 Upload":
-        st.header("📤 Bulk Upload")
-        
-        if st.session_state.user_role not in ["Admin", "Manager"]:
-            st.error("Only Admins/Managers")
-        else:
-            data_type = st.selectbox("Type", ["Maintenance", "Safety", "Flights"])
-            file = st.file_uploader("CSV", type="csv")
-            
-            if file:
-                try:
-                    content = file.read().decode('utf-8')
-                    reader = csv.DictReader(io.StringIO(content))
-                    rows = list(reader)
-                    
-                    st.write(f"Preview: {len(rows)} rows")
-                    st.table(rows[:10])
-                    
-                    if st.button("✅ Upload All"):
-                        # Get the correct columns based on data type
-                        if data_type == "Maintenance":
-                            cols = MAINTENANCE_COLS
-                            data_list = maint_data
-                            filename = MAINTENANCE_FILE
-                        elif data_type == "Safety":
-                            cols = SAFETY_COLS
-                            data_list = safety_data
-                            filename = SAFETY_FILE
-                        else:
-                            cols = FLIGHTS_COLS
-                            data_list = flights_data
-                            filename = FLIGHTS_FILE
-                        
-                        # Clean rows - only keep valid columns and auto-generate IDs
-                        cleaned_rows = []
-                        next_id = max([int(r.get("id", 0)) for r in data_list] + [0]) + 1
-                        
-                        for row in rows:
-                            cleaned_row = {}
-                            for col in cols:
-                                if col == "id":
-                                    cleaned_row[col] = str(next_id)
-                                    next_id += 1
-                                else:
-                                    cleaned_row[col] = row.get(col, "")
-                            cleaned_rows.append(cleaned_row)
-                        
-                        # Append to data
-                        data_list.extend(cleaned_rows)
-                        
-                        # Write to CSV
-                        write_csv(filename, data_list, cols)
-                        
-                        st.success(f"✅ {len(rows)} records uploaded!")
+            if login_btn:
+                if username and password:
+                    success, role = authenticate(username, password)
+                    if success:
+                        st.session_state.user = username
+                        st.session_state.role = role
+                        st.success(f"Welcome {username}!")
                         st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    else:
+                        st.error("Invalid credentials")
+                else:
+                    st.warning("Please enter credentials")
+            
+            if demo_btn:
+                st.session_state.user = 'demo'
+                st.session_state.role = 'Viewer'
+                st.rerun()
+        
+        st.info("""
+        **Demo Credentials:**
+        - Admin: `admin` / `admin123`
+        - Manager: `manager` / `manager123`
+        - Engineer: `engineer` / `engineer123`
+        """)
+
+# AI Chat Interface
+def show_ai_chat():
+    st.title("🤖 AI Operations Intelligence")
+    st.markdown("Ask questions about your fleet operations and get AI-powered insights")
     
-    elif page == "📥 Export":
-        st.header("📥 Export Data")
+    # Initialize AI Agent
+    ai_agent = AIAgent()
+    
+    # Display chat history
+    chat_container = st.container(height=400, border=True)
+    with chat_container:
+        for msg in st.session_state.chat_history:
+            if msg['role'] == 'user':
+                st.markdown(f'<div class="user-message">👤 **You:** {msg["content"]}</div>', 
+                          unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="assistant-message">🤖 **AI Assistant:**<br>{msg["content"]}</div>', 
+                          unsafe_allow_html=True)
+    
+    # Input section
+    col1, col2 = st.columns([5, 1])
+    
+    with col1:
+        user_query = st.text_input(
+            "Ask a question...",
+            placeholder="e.g., How can we decrease maintenance frequency? What are our top risks?",
+            key="ai_chat_input"
+        )
+    
+    with col2:
+        send_btn = st.button("Send", use_container_width=True)
+    
+    # Process query
+    if send_btn and user_query:
+        # Add user message
+        st.session_state.chat_history.append({'role': 'user', 'content': user_query})
         
-        if st.button("Export Maintenance"):
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=MAINTENANCE_COLS)
-            writer.writeheader()
-            writer.writerows(maint_data)
-            st.download_button("📥 maintenance.csv", output.getvalue(), "maintenance.csv")
+        # Get AI response
+        with st.spinner("🤖 AI is analyzing your data..."):
+            ai_response = ai_agent.get_ai_response(user_query)
         
-        if st.button("Export Safety"):
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=SAFETY_COLS)
-            writer.writeheader()
-            writer.writerows(safety_data)
-            st.download_button("📥 safety.csv", output.getvalue(), "safety.csv")
+        # Add AI response
+        st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+        st.rerun()
+    
+    # Clear chat button
+    if st.session_state.chat_history:
+        if st.button("Clear Chat History"):
+            st.session_state.chat_history = []
+            st.rerun()
+    
+    # Suggested queries
+    st.divider()
+    st.markdown("**💡 Suggested Questions:**")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("How to reduce maintenance costs?", use_container_width=True):
+            st.session_state.chat_history.append({'role': 'user', 'content': "How to reduce maintenance costs?"})
+            ai_response = ai_agent.get_ai_response("How to reduce maintenance costs?")
+            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            st.rerun()
         
-        if st.button("Export Flights"):
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=FLIGHTS_COLS)
-            writer.writeheader()
-            writer.writerows(flights_data)
-            st.download_button("📥 flights.csv", output.getvalue(), "flights.csv")
+        if st.button("What are our safety risks?", use_container_width=True):
+            st.session_state.chat_history.append({'role': 'user', 'content': "What are our safety risks?"})
+            ai_response = ai_agent.get_ai_response("What are our safety risks?")
+            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            st.rerun()
+    
+    with col2:
+        if st.button("Analyze maintenance patterns", use_container_width=True):
+            st.session_state.chat_history.append({'role': 'user', 'content': "Analyze maintenance patterns"})
+            ai_response = ai_agent.get_ai_response("Analyze maintenance patterns")
+            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            st.rerun()
+        
+        if st.button("How to improve efficiency?", use_container_width=True):
+            st.session_state.chat_history.append({'role': 'user', 'content': "How to improve efficiency?"})
+            ai_response = ai_agent.get_ai_response("How to improve efficiency?")
+            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            st.rerun()
+
+# Bulk Upload Interface
+def show_bulk_upload():
+    st.title("📤 Bulk Data Upload")
+    st.markdown("Upload large CSV files to import data in bulk")
+    
+    # Select data type
+    data_type = st.selectbox(
+        "Select Data Type",
+        ["Maintenance", "Safety", "Flights"]
+    )
+    
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Choose a CSV file",
+        type=['csv'],
+        help="Upload a CSV file with your data. The system will automatically process and import all records."
+    )
+    
+    if uploaded_file is not None:
+        # Preview the data
+        st.subheader("📋 Data Preview")
+        try:
+            df = pd.read_csv(uploaded_file)
+            
+            # Show statistics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Rows", len(df))
+            with col2:
+                st.metric("Total Columns", len(df.columns))
+            with col3:
+                st.metric("Data Type", data_type)
+            
+            # Show preview
+            st.dataframe(df.head(10), use_container_width=True)
+            
+            # Show column information
+            with st.expander("📊 Column Information"):
+                col_info = pd.DataFrame({
+                    'Column': df.columns,
+                    'Type': df.dtypes.astype(str),
+                    'Non-Null Count': df.count(),
+                    'Unique Values': df.nunique()
+                })
+                st.dataframe(col_info, use_container_width=True)
+            
+            # Upload button
+            st.divider()
+            col1, col2, col3 = st.columns([2, 1, 2])
+            
+            with col2:
+                if st.button("📥 Import All Records", use_container_width=True, type="primary"):
+                    # Reset file position
+                    uploaded_file.seek(0)
+                    
+                    # Process upload
+                    with st.spinner(f"Importing {len(df)} records..."):
+                        records_added, status = DataManager.bulk_upload_csv(
+                            data_type.lower(), 
+                            uploaded_file
+                        )
+                    
+                    if status == "Success":
+                        st.success(f"✅ Successfully imported {records_added} records!")
+                        st.balloons()
+                        
+                        # Show summary
+                        st.info(f"""
+                        **Import Summary:**
+                        - Data Type: {data_type}
+                        - Records Imported: {records_added}
+                        - Import Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+                        - Imported By: {st.session_state.user}
+                        """)
+                    else:
+                        st.error(f"❌ Import failed: {status}")
+        
+        except Exception as e:
+            st.error(f"Error reading file: {str(e)}")
+            st.info("Please ensure your CSV file is properly formatted")
+    
+    # Sample CSV templates
+    st.divider()
+    st.subheader("📝 CSV Templates")
+    st.markdown("Download these templates to format your data correctly:")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Maintenance template
+        maint_template = pd.DataFrame({
+            'maintenance_date': ['2025-01-15', '2025-01-20'],
+            'aircraft': ['AP-BOC', 'AP-BOD'],
+            'type': ['A-Check', 'B-Check'],
+            'engineer': ['John Doe', 'Jane Smith'],
+            'priority': ['High', 'Medium'],
+            'status': ['Pending', 'In Progress'],
+            'estimated_hours': [8.0, 12.0],
+            'parts_replaced': ['Filter, Oil', 'Brake pads'],
+            'notes': ['Routine check', 'Scheduled maintenance']
+        })
+        csv = maint_template.to_csv(index=False)
+        st.download_button(
+            "📥 Maintenance Template",
+            csv,
+            "maintenance_template.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    
+    with col2:
+        # Safety template
+        safety_template = pd.DataFrame({
+            'date': ['2025-01-10', '2025-01-11'],
+            'flight': ['PK-300', 'PK-301'],
+            'location': ['Karachi', 'Islamabad'],
+            'type': ['Bird Strike', 'Technical Failure'],
+            'severity': ['Low', 'Medium'],
+            'department': ['ground handling', 'security'],
+            'description': ['Minor bird strike', 'Hydraulic issue'],
+            'reporter': ['Captain Ahmed', 'First Officer Ali'],
+            'status': ['open', 'System closed']
+        })
+        csv = safety_template.to_csv(index=False)
+        st.download_button(
+            "📥 Safety Template",
+            csv,
+            "safety_template.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    
+    with col3:
+        # Flight template
+        flight_template = pd.DataFrame({
+            'date': ['2025-01-15', '2025-01-15'],
+            'aircraft': ['AP-BOC', 'AP-BOD'],
+            'flight_number': ['PK-300', 'PK-301'],
+            'departure': ['KHI', 'ISB'],
+            'arrival': ['ISB', 'KHI'],
+            'pilot': ['Captain Ahmed', 'Captain Ali'],
+            'crew_count': [4, 5],
+            'passengers': [150, 180],
+            'notes': ['On-time departure,  smooth flight', 'Special meal request for 5 passengers']
+        })
+        csv = flight_template.to_csv(index=False)
+        st.download_button(
+            "📥 Flight Template",
+            csv,
+            "flight_template.csv",
+            "text/csv",
+            use_container_width=True
+        )
+
+# Export Data Interface
+def show_export_data():
+    st.title("📥 Export Data")
+    st.markdown("Export your operational data for analysis or backup")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("### 🔧 Maintenance Data")
+        st.metric("Total Records", len(st.session_state.maintenance_data))
+        if st.session_state.maintenance_data:
+            csv = DataManager.export_to_csv('maintenance')
+            if csv:
+                st.download_button(
+                    "📥 Export Maintenance",
+                    csv,
+                    f"maintenance_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+        else:
+            st.info("No data to export")
+    
+    with col2:
+        st.markdown("### ⚠️ Safety Data")
+        st.metric("Total Records", len(st.session_state.safety_data))
+        if st.session_state.safety_data:
+            csv = DataManager.export_to_csv('safety')
+            if csv:
+                st.download_button(
+                    "📥 Export Safety",
+                    csv,
+                    f"safety_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+        else:
+            st.info("No data to export")
+    
+    with col3:
+        st.markdown("### ✈️ Flight Data")
+        st.metric("Total Records", len(st.session_state.flight_data))
+        if st.session_state.flight_data:
+            csv = DataManager.export_to_csv('flight')
+            if csv:
+                st.download_button(
+                    "📥 Export Flights",
+                    csv,
+                    f"flights_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+        else:
+            st.info("No data to export")
+    
+    # Export all data
+    st.divider()
+    st.subheader("📦 Export All Data")
+    
+    if st.button("🗂️ Generate Complete Data Package", use_container_width=True):
+        with st.spinner("Preparing data package..."):
+            # Create a comprehensive export
+            all_data = {
+                'export_date': datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'exported_by': st.session_state.user,
+                'statistics': {
+                    'maintenance_records': len(st.session_state.maintenance_data),
+                    'safety_records': len(st.session_state.safety_data),
+                    'flight_records': len(st.session_state.flight_data)
+                },
+                'maintenance_data': st.session_state.maintenance_data,
+                'safety_data': st.session_state.safety_data,
+                'flight_data': st.session_state.flight_data
+            }
+            
+            # Convert to JSON for complete export
+            json_str = json.dumps(all_data, indent=2, default=str)
+            
+            st.download_button(
+                "📥 Download Complete Data Package (JSON)",
+                json_str,
+                f"airsial_complete_export_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                "application/json",
+                use_container_width=True
+            )
+            
+        st.success("✅ Data package ready for download!")
+
+# Dashboard
+def show_dashboard():
+    st.title("🏠 Operations Dashboard")
+    
+    # KPIs
+    col1, col2, col3, col4 = st.columns(4)
+    
+    total_maintenance = len(st.session_state.maintenance_data)
+    pending_maintenance = len([m for m in st.session_state.maintenance_data if m.get('status') == 'Pending'])
+    total_safety = len(st.session_state.safety_data)
+    critical_safety = len([s for s in st.session_state.safety_data if s.get('severity') in ['Critical', 'High']])
+    
+    with col1:
+        st.metric("Maintenance Tasks", total_maintenance, f"{pending_maintenance} pending")
+    
+    with col2:
+        efficiency = ((total_maintenance - pending_maintenance) / total_maintenance * 100) if total_maintenance > 0 else 0
+        st.metric("Efficiency", f"{efficiency:.1f}%", "Target: 95%")
+    
+    with col3:
+        st.metric("Safety Incidents", total_safety, f"{critical_safety} critical")
+    
+    with col4:
+        st.metric("Total Flights", len(st.session_state.flight_data))
+    
+    st.divider()
+    
+    # Recent activities and alerts
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("📜 Recent Activities")
+        activities = []
+        
+        for m in st.session_state.maintenance_data[-3:]:
+            activities.append(f"🔧 Maintenance: {m.get('type', 'N/A')} on {m.get('aircraft', 'N/A')}")
+        
+        for s in st.session_state.safety_data[-3:]:
+            activities.append(f"⚠️ Safety: {s.get('type', 'N/A')} [{s.get('severity', 'N/A')}]")
+        
+        for f in st.session_state.flight_data[-3:]:
+            activities.append(f"✈️ Flight: {f.get('flight_number', 'N/A')}")
+        
+        if activities:
+            for activity in activities[-5:]:
+                st.write(activity)
+        else:
+            st.info("No recent activities")
+    
+    with col2:
+        st.subheader("🚨 Alerts")
+        
+        if critical_safety > 0:
+            st.error(f"{critical_safety} critical safety incidents!")
+        
+        if pending_maintenance > 5:
+            st.warning(f"{pending_maintenance} maintenance tasks pending")
+        
+        if critical_safety == 0 and pending_maintenance <= 5:
+            st.success("All systems operational")
+
+# Main Application
+def main():
+    if st.session_state.user is None:
+        show_login()
+    else:
+        # Sidebar navigation
+        with st.sidebar:
+            st.markdown(f"### 👤 {st.session_state.user}")
+            st.markdown(f"**Role:** {st.session_state.role}")
+            st.divider()
+            
+            page = st.radio(
+                "Navigation",
+                [
+                    "🏠 Dashboard",
+                    "🤖 AI Assistant",
+                    "📤 Bulk Upload",
+                    "📥 Export Data",
+                    "🔧 Maintenance",
+                    "⚠️ Safety",
+                    "✈️ Flights"
+                ]
+            )
+            
+            st.divider()
+            
+            # Quick Stats
+            st.markdown("### 📊 Quick Stats")
+            st.metric("Total Operations", 
+                     len(st.session_state.maintenance_data) + 
+                     len(st.session_state.safety_data) + 
+                     len(st.session_state.flight_data))
+            
+            st.divider()
+            
+            if st.button("🚪 Logout", use_container_width=True):
+                for key in ['user', 'role', 'chat_history']:
+                    st.session_state[key] = None
+                st.rerun()
+        
+        # Main content based on navigation
+        if page == "🏠 Dashboard":
+            show_dashboard()
+        elif page == "🤖 AI Assistant":
+            show_ai_chat()
+        elif page == "📤 Bulk Upload":
+            show_bulk_upload()
+        elif page == "📥 Export Data":
+            show_export_data()
+        elif page == "🔧 Maintenance":
+            # You can add the maintenance page here
+            st.title("🔧 Maintenance Management")
+            st.info("Maintenance management interface - Add your implementation here")
+        elif page == "⚠️ Safety":
+            st.title("⚠️ Safety Management")
+            st.info("Safety management interface - Add your implementation here")
+        elif page == "✈️ Flights":
+            st.title("✈️ Flight Operations")
+            st.info("Flight operations interface - Add your implementation here")
+
+if __name__ == "__main__":
+    main()
