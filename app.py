@@ -792,6 +792,176 @@ def show_flights():
                 else:
                     st.error("Please fill required fields")
 
+# AI Chat Interface
+def show_ai_chat():
+    st.title("🤖 AI Operations Intelligence")
+    st.markdown("Ask questions about your fleet operations and get AI-powered insights")
+    
+    # Initialize AI Agent
+    ai_agent = AIAgent()
+    
+    # Display chat history
+    chat_container = st.container(height=400, border=True)
+    with chat_container:
+        for msg in st.session_state.chat_history:
+            if msg['role'] == 'user':
+                st.markdown(f'<div class="user-message">👤 **You:** {msg["content"]}</div>', 
+                          unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="assistant-message">🤖 **AI Assistant:**<br>{msg["content"]}</div>', 
+                          unsafe_allow_html=True)
+    
+    # Input section
+    col1, col2 = st.columns([5, 1])
+    
+    with col1:
+        user_query = st.text_input(
+            "Ask a question...",
+            placeholder="e.g., How can we decrease maintenance frequency? What are our top risks?",
+            key="ai_chat_input"
+        )
+    
+    with col2:
+        send_btn = st.button("Send", use_container_width=True)
+    
+    # Process query
+    if send_btn and user_query:
+        # Add user message
+        st.session_state.chat_history.append({'role': 'user', 'content': user_query})
+        
+        # Get AI response
+        with st.spinner("🤖 AI is analyzing your data..."):
+            ai_response = ai_agent.get_ai_response(user_query)
+        
+        # Add AI response
+        st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+        st.rerun()
+    
+    # Clear chat button
+    if st.session_state.chat_history:
+        if st.button("Clear Chat History"):
+            st.session_state.chat_history = []
+            st.rerun()
+    
+    # Suggested queries
+    st.divider()
+    st.markdown("**💡 Suggested Questions:**")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("How to reduce maintenance costs?", use_container_width=True):
+            st.session_state.chat_history.append({'role': 'user', 'content': "How to reduce maintenance costs?"})
+            ai_response = ai_agent.get_ai_response("How to reduce maintenance costs?")
+            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            st.rerun()
+        
+        if st.button("What are our safety risks?", use_container_width=True):
+            st.session_state.chat_history.append({'role': 'user', 'content': "What are our safety risks?"})
+            ai_response = ai_agent.get_ai_response("What are our safety risks?")
+            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            st.rerun()
+    
+    with col2:
+        if st.button("Analyze maintenance patterns", use_container_width=True):
+            st.session_state.chat_history.append({'role': 'user', 'content': "Analyze maintenance patterns"})
+            ai_response = ai_agent.get_ai_response("Analyze maintenance patterns")
+            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            st.rerun()
+        
+        if st.button("How to improve efficiency?", use_container_width=True):
+            st.session_state.chat_history.append({'role': 'user', 'content': "How to improve efficiency?"})
+            ai_response = ai_agent.get_ai_response("How to improve efficiency?")
+            st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
+            st.rerun()
+
+# Export Data Interface
+def show_export_data():
+    st.title("📥 Export Data")
+    st.markdown("Export your operational data for analysis or backup")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("### 🔧 Maintenance Data")
+        st.metric("Total Records", len(st.session_state.maintenance_data))
+        if st.session_state.maintenance_data:
+            df = pd.DataFrame(st.session_state.maintenance_data)
+            csv = df.to_csv(index=False)
+            st.download_button(
+                "📥 Export Maintenance",
+                csv,
+                f"maintenance_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                "text/csv",
+                use_container_width=True
+            )
+        else:
+            st.info("No data to export")
+    
+    with col2:
+        st.markdown("### ⚠️ Safety Data")
+        st.metric("Total Records", len(st.session_state.safety_data))
+        if st.session_state.safety_data:
+            df = pd.DataFrame(st.session_state.safety_data)
+            csv = df.to_csv(index=False)
+            st.download_button(
+                "📥 Export Safety",
+                csv,
+                f"safety_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                "text/csv",
+                use_container_width=True
+            )
+        else:
+            st.info("No data to export")
+    
+    with col3:
+        st.markdown("### ✈️ Flight Data")
+        st.metric("Total Records", len(st.session_state.flight_data))
+        if st.session_state.flight_data:
+            df = pd.DataFrame(st.session_state.flight_data)
+            csv = df.to_csv(index=False)
+            st.download_button(
+                "📥 Export Flights",
+                csv,
+                f"flights_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                "text/csv",
+                use_container_width=True
+            )
+        else:
+            st.info("No data to export")
+    
+    # Export all data
+    st.divider()
+    st.subheader("📦 Export All Data")
+    
+    if st.button("🗂️ Generate Complete Data Package", use_container_width=True):
+        with st.spinner("Preparing data package..."):
+            # Create a comprehensive export
+            all_data = {
+                'export_date': datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'exported_by': st.session_state.user,
+                'statistics': {
+                    'maintenance_records': len(st.session_state.maintenance_data),
+                    'safety_records': len(st.session_state.safety_data),
+                    'flight_records': len(st.session_state.flight_data)
+                },
+                'maintenance_data': st.session_state.maintenance_data,
+                'safety_data': st.session_state.safety_data,
+                'flight_data': st.session_state.flight_data
+            }
+            
+            # Convert to JSON for complete export
+            json_str = json.dumps(all_data, indent=2, default=str)
+            
+            st.download_button(
+                "📥 Download Complete Data Package (JSON)",
+                json_str,
+                f"airsial_complete_export_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                "application/json",
+                use_container_width=True
+            )
+            
+        st.success("✅ Data package ready for download!")
+
 # Bulk Upload (Admin Only)
 def show_bulk_upload():
     st.title("📤 Bulk Data Upload")
@@ -869,10 +1039,7 @@ def main():
         if page == "🏠 Dashboard":
             show_dashboard()
         elif page == "🤖 AI Assistant":
-            # AI chat implementation (same as before)
-            ai_agent = AIAgent()
-            st.title("🤖 AI Assistant")
-            # ... (rest of AI chat code)
+            show_ai_chat()
         elif page == "📤 Bulk Upload":
             show_bulk_upload()
         elif page == "🔧 Maintenance":
@@ -881,6 +1048,8 @@ def main():
             show_safety()
         elif page == "✈️ Flights":
             show_flights()
+        elif page == "📥 Export Data":
+            show_export_data()
 
 if __name__ == "__main__":
     main()
